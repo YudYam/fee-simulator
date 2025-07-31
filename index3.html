@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>料金の仕組み解説</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/prop-types@15.6.0/prop-types.js"></script>
+    <script src="https://unpkg.com/recharts@2.5.0/dist/Recharts.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* ローディング表示 */
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 20px;
+            color: #4f46e5;
+        }
+        
+        /* スライダーのスタイル改善 */
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            background: transparent;
+            cursor: pointer;
+        }
+        
+        input[type="range"]::-webkit-slider-track {
+            background: #e5e7eb;
+            height: 6px;
+            border-radius: 3px;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            background: #4f46e5;
+            height: 20px;
+            width: 20px;
+            border-radius: 50%;
+            margin-top: -7px;
+        }
+        
+        input[type="range"]::-moz-range-track {
+            background: #e5e7eb;
+            height: 6px;
+            border-radius: 3px;
+        }
+        
+        input[type="range"]::-moz-range-thumb {
+            background: #4f46e5;
+            height: 20px;
+            width: 20px;
+            border-radius: 50%;
+            border: none;
+        }
+        
+        /* モバイル対応の改善 */
+        @media (max-width: 640px) {
+            .container {
+                padding-left: 0.5rem;
+                padding-right: 0.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">読み込み中...</div>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect, useRef } = React;
+        
+        // Rechartsコンポーネントの取得
+        const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } = window.Recharts || {};
+
+        // 簡単なアイコンコンポーネント
+        const Icon = ({ name, className = "" }) => {
+            const icons = {
+                'sliders': '⚙️',
+                'server': '🖥️',
+                'cpu': '🤖',
+                'package': '📦',
+                'file-text': '📄',
+                'tag': '🏷️',
+                'calculator': '🧮',
+                'bar-chart-2': '📊',
+                'plus': '➕',
+                'arrow-down-circle': '⬇️',
+                'alert-triangle': '⚠️',
+                'equal': '='
+            };
+            return <span className={className}>{icons[name] || '•'}</span>;
+        };
+
+        // --- Configuration ---
+        const BASE_FEE_PER_PROJECT = 70000;
+        const AI_BASE_FEE_PER_PROJECT = 80000;
+        const INCLUDED_PAGES = 200;
+        const PAGES_PER_CONTRACT = 6;
+
+        const TIERED_PRICING = {
+            1: 990,
+            2: 970,
+            3: 930,
+            4: 870,
+            5: 790,
+            6: 690,
+        };
+
+        // --- Helper Functions ---
+        const formatCurrency = (value) => {
+            return new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(value);
+        };
+
+        // --- Components ---
+        const Header = () => (
+            <header className="bg-white shadow-md sticky top-0 z-10">
+                <div className="container mx-auto px-4 sm:px-6 py-3 sm:py-4">
+                    <div className="flex items-center space-x-2 sm:space-x-3">
+                        <div className="p-1.5 sm:p-2 bg-indigo-600 rounded-full text-white">
+                            <Icon name="sliders" />
+                        </div>
+                        <h1 className="text-lg sm:text-xl md:text-2xl font-bold text-gray-800">料金の仕組み解説</h1>
+                    </div>
+                </div>
+            </header>
+        );
+
+        const ProjectCountSelector = ({ value, setValue, icon }) => (
+            <div className="w-full">
+                <label className="flex items-center text-base sm:text-lg font-medium text-gray-700 mb-3">
+                    {icon}
+                    <span className="ml-2">貴事務所からご依頼いただく案件数</span>
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                    {[1, 2, 3, 4, 5, 6].map((count) => (
+                        <button
+                            key={count}
+                            onClick={() => setValue(count)}
+                            className={`p-2 sm:p-3 rounded-lg text-center font-bold transition-all duration-200 text-sm sm:text-base ${
+                                value === count 
+                                ? 'bg-indigo-600 text-white shadow-md ring-2 ring-offset-2 ring-indigo-500' 
+                                : 'bg-gray-200 text-gray-700 hover:bg-indigo-100'
+                            }`}
+                        >
+                            {count}
+                        </button>
+                    ))}
+                </div>
+            </div>
+        );
+
+        const IndividualPageInput = ({ label, value, setValue, min, max, step }) => (
+            <div className="w-full">
+                <div className="flex justify-between items-start mb-2">
+                    <span className="text-sm sm:text-base font-medium text-gray-700">{label}</span>
+                    <div className="text-right">
+                        <span className="text-indigo-600 font-bold text-sm sm:text-base">{value.toLocaleString()}ページ</span>
+                        <span className="block text-xs text-gray-500">(約{Math.round(value / PAGES_PER_CONTRACT)}通)</span>
+                    </div>
+                </div>
+                <input
+                    type="range"
+                    min={min}
+                    max={max}
+                    step={step}
+                    value={value}
+                    onChange={(e) => setValue(Number(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg cursor-pointer"
+                    style={{
+                        background: `linear-gradient(to right, #4f46e5 0%, #4f46e5 ${(value - min) / (max - min) * 100}%, #e5e7eb ${(value - min) / (max - min) * 100}%, #e5e7eb 100%)`
+                    }}
+                />
+            </div>
+        );
+
+        const ProjectPagesManager = ({ projects, onPageChange }) => (
+            <div className="w-full">
+                <label className="flex items-center text-base sm:text-lg font-medium text-gray-700 mb-3">
+                    <Icon name="file-text" className="text-indigo-500" />
+                    <span className="ml-2">各案件のページ数</span>
+                </label>
+                <div className={`grid ${projects.length > 3 ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'} gap-3`}>
+                    {projects.map((project, index) => (
+                        <div key={project.id} className="p-3 bg-gray-100 rounded-lg">
+                            <IndividualPageInput 
+                                label={`案件 ${index + 1}`}
+                                value={project.pages}
+                                setValue={(newPages) => onPageChange(project.id, newPages)}
+                                min={1}
+                                max={1000}
+                                step={10}
+                            />
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+
+        const FeeCard = ({ title, subTitle, amount, icon, animate, isSubCard = false }) => (
+            <div className={`p-3 sm:p-4 rounded-xl border-2 transition-all duration-300 ${animate ? 'border-indigo-400 bg-indigo-50 shadow-lg' : isSubCard ? 'bg-white border-gray-200' : 'border-gray-200 bg-white'}`}>
+                <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                        <h3 className={`${isSubCard ? 'text-sm sm:text-base' : 'text-base sm:text-lg'} font-semibold text-gray-800`}>{title}</h3>
+                        <p className="text-xs text-gray-500">{subTitle}</p>
+                    </div>
+                    {icon && (
+                        <div className="p-1 sm:p-2 bg-indigo-100 text-indigo-600 rounded-lg ml-2">
+                            {icon}
+                        </div>
+                    )}
+                </div>
+                <p className={`text-right ${isSubCard ? 'text-lg sm:text-xl' : 'text-xl sm:text-2xl'} font-bold text-indigo-600 mt-2`}>{formatCurrency(amount)}</p>
+            </div>
+        );
+
+        const TierRateDisplay = ({ projectCount }) => (
+            <div className="w-full">
+                <label className="flex items-center text-base sm:text-lg font-medium text-gray-700 mb-3">
+                    <Icon name="tag" className="text-indigo-500" />
+                    <span className="ml-2">適用される超過ページ単価</span>
+                </label>
+                <div className="space-y-1">
+                    {Object.entries(TIERED_PRICING).map(([count, rate]) => (
+                        <div
+                            key={count}
+                            className={`p-2 rounded-md transition-all duration-300 text-sm sm:text-base ${Number(count) === projectCount ? 'bg-indigo-100 ring-2 ring-indigo-400' : 'bg-gray-50'}`}
+                        >
+                            <span className="font-bold">{count} 案件の場合:</span>
+                            <span className="float-right font-mono">{formatCurrency(rate)}/ページ</span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+
+        const CalculationStep = ({ title, calculation, result, isTotal = false, highlight = false }) => (
+            <div className={`rounded-lg flex flex-col transition-all duration-300 ${isTotal ? 'bg-indigo-600 text-white p-4' : highlight ? 'bg-indigo-100 ring-2 ring-indigo-400 p-3 sm:p-4' : 'bg-white border border-gray-200 p-3 sm:p-4'}`}>
+                <div className="flex-1">
+                    <p className={`text-xs sm:text-sm font-semibold mb-2 ${isTotal ? 'text-indigo-100' : 'text-gray-600'}`}>{title}</p>
+                    <div className={`${isTotal ? 'text-white' : 'text-gray-800'}`}>
+                        {calculation}
+                    </div>
+                </div>
+                <div className={`mt-3 pt-2 border-t ${isTotal ? 'border-indigo-500' : 'border-gray-200'}`}>
+                    <div className="flex items-center justify-between">
+                        <span className={`text-xs ${isTotal ? 'text-indigo-200' : 'text-gray-500'}`}>小計</span>
+                        <p className={`font-bold text-lg sm:text-xl ${isTotal ? 'text-white' : 'text-indigo-600'}`}>{result}</p>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const CustomTooltip = ({ active, payload, label }) => {
+            if (active && payload && payload.length) {
+                const data = payload[0].payload;
+                return (
+                    <div className="bg-white p-3 rounded-lg shadow-lg border border-gray-200">
+                        <p className="font-bold text-gray-800">{`${label}`}</p>
+                        <p className="text-indigo-600">{`料金: ${formatCurrency(payload[0].value)}`}</p>
+                        <p className="text-gray-600 text-sm">{`${data.pages}ページ`}</p>
+                    </div>
+                );
+            }
+            return null;
+        };
+
+        const App = () => {
+            const [projectCount, setProjectCount] = useState(2);
+            const [projects, setProjects] = useState([
+                { id: 1, pages: 400 },
+                { id: 2, pages: 250 },
+            ]);
+            const [animateFixed, setAnimateFixed] = useState(false);
+            const [animatePages, setAnimatePages] = useState(false);
+            const [activeTab, setActiveTab] = useState('summary');
+            const [changedProjectId, setChangedProjectId] = useState(null);
+            const pageAnimationTimer = useRef(null);
+            const changeAnimationTimer = useRef(null);
+
+            // Animate on projectCount change
+            useEffect(() => {
+                setAnimateFixed(true);
+                const timer = setTimeout(() => setAnimateFixed(false), 700);
+                return () => clearTimeout(timer);
+            }, [projectCount]);
+
+            // Sync projects array with projectCount
+            useEffect(() => {
+                const currentLength = projects.length;
+                if (projectCount > currentLength) {
+                    const newItems = Array.from({ length: projectCount - currentLength }, (_, i) => ({
+                        id: Date.now() + i,
+                        pages: 200, 
+                    }));
+                    setProjects(prev => [...prev, ...newItems]);
+                } else if (projectCount < currentLength) {
+                    setProjects(prev => prev.slice(0, projectCount));
+                }
+            }, [projectCount, projects.length]);
+
+            const handlePageChange = (id, newPages) => {
+                setProjects(currentProjects => 
+                    currentProjects.map(p => (p.id === id ? { ...p, pages: newPages } : p))
+                );
+                
+                // 変更されたプロジェクトをハイライト
+                setChangedProjectId(id);
+                if (changeAnimationTimer.current) {
+                    clearTimeout(changeAnimationTimer.current);
+                }
+                changeAnimationTimer.current = setTimeout(() => {
+                    setChangedProjectId(null);
+                }, 2000); // 2秒間ハイライト
+                
+                // Trigger page-related animation
+                if (pageAnimationTimer.current) {
+                    clearTimeout(pageAnimationTimer.current);
+                }
+                setAnimatePages(true);
+                pageAnimationTimer.current = setTimeout(() => setAnimatePages(false), 700);
+            };
+
+            // Cleanup timer on unmount
+            useEffect(() => {
+                return () => {
+                    if (pageAnimationTimer.current) {
+                        clearTimeout(pageAnimationTimer.current);
+                    }
+                    if (changeAnimationTimer.current) {
+                        clearTimeout(changeAnimationTimer.current);
+                    }
+                }
+            }, []);
+
+            const calculation = useMemo(() => {
+                const rate = TIERED_PRICING[projectCount] || TIERED_PRICING[6];
+                const fixedCostPerProject = BASE_FEE_PER_PROJECT + AI_BASE_FEE_PER_PROJECT;
+                const totalFixedCost = fixedCostPerProject * projectCount;
+                
+                const perProjectCosts = projects.map(project => {
+                    const excessPages = Math.max(0, project.pages - INCLUDED_PAGES);
+                    return fixedCostPerProject + (excessPages * rate);
+                });
+
+                const totalExcessPages = projects.reduce((acc, project) => {
+                    return acc + Math.max(0, project.pages - INCLUDED_PAGES);
+                }, 0);
+
+                const totalExcessCharge = totalExcessPages * rate;
+                const totalCost = totalFixedCost + totalExcessCharge;
+
+                return {
+                    rate,
+                    fixedCostPerProject,
+                    totalFixedCost,
+                    totalExcessPages,
+                    totalExcessCharge,
+                    totalCost,
+                    perProjectCosts,
+                };
+            }, [projectCount, projects]);
+
+            const chartData = useMemo(() => {
+                return projects.map((project, index) => ({
+                    name: `案件 ${index + 1}`,
+                    '料金': calculation.perProjectCosts[index],
+                    id: project.id,
+                    pages: project.pages
+                }));
+            }, [projects, calculation.perProjectCosts]);
+
+            const fixedCostCalculation = (
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                            <p className="text-xs text-gray-500 mb-1">プロジェクト管理費</p>
+                            <p className="text-sm sm:text-base font-semibold">{formatCurrency(BASE_FEE_PER_PROJECT)}</p>
+                        </div>
+                        <span className="mx-2 text-gray-400">×</span>
+                        <div className="text-center">
+                            <p className="text-xs text-gray-500 mb-1">案件数</p>
+                            <p className="text-sm sm:text-base font-bold bg-gray-100 px-3 py-1 rounded">{projectCount}件</p>
+                        </div>
+                    </div>
+                    <div className="h-px bg-gray-200"></div>
+                    <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                            <p className="text-xs text-gray-500 mb-1">AI解析基本料金</p>
+                            <p className="text-sm sm:text-base font-semibold">{formatCurrency(AI_BASE_FEE_PER_PROJECT)}</p>
+                        </div>
+                        <span className="mx-2 text-gray-400">×</span>
+                        <div className="text-center">
+                            <p className="text-xs text-gray-500 mb-1">案件数</p>
+                            <p className="text-sm sm:text-base font-bold bg-gray-100 px-3 py-1 rounded">{projectCount}件</p>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            const excessPagesCalculation = (
+                <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                        <p className="text-xs text-gray-500 mb-1">超過ページ数</p>
+                        <p className="text-sm sm:text-base font-bold bg-gray-100 px-3 py-1 rounded inline-block">{calculation.totalExcessPages.toLocaleString()}ページ</p>
+                    </div>
+                    <span className="mx-2 text-gray-400">×</span>
+                    <div className="text-right">
+                        <p className="text-xs text-gray-500 mb-1">単価</p>
+                        <p className="text-sm sm:text-base font-semibold">{formatCurrency(calculation.rate)}</p>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="bg-gray-50 min-h-screen font-sans">
+                    <Header />
+                    <main className="container mx-auto p-3 sm:p-4 lg:p-8 max-w-7xl">
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-8">
+                            {/* Left: Controls */}
+                            <div className="bg-white p-4 sm:p-6 rounded-xl shadow-md border border-gray-200 self-start space-y-6 sm:space-y-8">
+                                
+                                {/* --- Project Base Fee Section --- */}
+                                <div className="space-y-3">
+                                    <h2 className="text-lg sm:text-xl font-bold text-gray-800 flex items-center">
+                                        <Icon name="server" className="mr-2 sm:mr-3 text-indigo-500"/>
+                                        プロジェクト基本料金
+                                    </h2>
+                                    <FeeCard 
+                                        title="プロジェクト管理費"
+                                        subTitle="月額/1案件あたり"
+                                        amount={BASE_FEE_PER_PROJECT}
+                                        animate={animateFixed}
+                                        isSubCard={true}
+                                    />
+                                </div>
+                                
+                                {/* --- AI Analysis Fee Section --- */}
+                                <div className="space-y-4 pt-6 sm:pt-8 border-t">
+                                    <h2 className="text-lg sm:text-xl font-bold text-gray-800 flex items-center">
+                                        <Icon name="cpu" className="mr-2 sm:mr-3 text-indigo-500"/>
+                                        AI解析料金
+                                    </h2>
+                                    
+                                    {/* --- AI Base Fee --- */}
+                                    <div className="pl-4 border-l-2 border-gray-200">
+                                        <h3 className="text-base sm:text-lg font-semibold text-gray-700 mb-2">基本料金</h3>
+                                         <FeeCard 
+                                            title="200ページまで"
+                                            subTitle="一律/1案件あたり"
+                                            amount={AI_BASE_FEE_PER_PROJECT}
+                                            animate={false}
+                                            isSubCard={true}
+                                        />
+                                    </div>
+
+                                    {/* --- AI Tiered Fee --- */}
+                                    <div className="pl-4 border-l-2 border-gray-200">
+                                        <h3 className="text-base sm:text-lg font-semibold text-gray-700 mb-3">従量課金</h3>
+                                        <div className="space-y-4 sm:space-y-6 bg-gray-50 p-3 sm:p-4 rounded-lg">
+                                            <ProjectCountSelector
+                                                value={projectCount}
+                                                setValue={setProjectCount}
+                                                icon={<Icon name="package" className="text-indigo-500" />}
+                                            />
+                                            <div className="space-y-4 pt-4 sm:pt-6 border-t">
+                                                <ProjectPagesManager
+                                                    projects={projects}
+                                                    onPageChange={handlePageChange}
+                                                />
+                                                <TierRateDisplay projectCount={projectCount} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                            </div>
+
+                            {/* Right: Calculation Breakdown */}
+                            <div className="space-y-4 sm:space-y-6">
+                                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                                    <h2 className="text-xl sm:text-2xl font-bold text-gray-800">料金計算のステップ</h2>
+                                    <div className="flex space-x-1 bg-gray-200 p-1 rounded-lg w-full sm:w-auto">
+                                        <button onClick={() => setActiveTab('summary')} className={`px-2 sm:px-3 py-1 text-xs sm:text-sm font-bold rounded-md flex items-center transition-all flex-1 sm:flex-initial justify-center ${activeTab === 'summary' ? 'bg-white text-indigo-600 shadow' : 'text-gray-600'}`}>
+                                            <Icon name="calculator" className="mr-1 sm:mr-2 text-xs" />
+                                            計算の内訳
+                                        </button>
+                                        <button onClick={() => setActiveTab('breakdown')} className={`px-2 sm:px-3 py-1 text-xs sm:text-sm font-bold rounded-md flex items-center transition-all flex-1 sm:flex-initial justify-center ${activeTab === 'breakdown' ? 'bg-white text-indigo-600 shadow' : 'text-gray-600'}`}>
+                                            <Icon name="bar-chart-2" className="mr-1 sm:mr-2 text-xs" />
+                                            案件ごとの料金
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                {activeTab === 'summary' && (
+                                    <div className="space-y-6">
+                                        {/* 2つの計算ステップ */}
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                            <CalculationStep 
+                                                title="ステップ1：固定料金"
+                                                calculation={fixedCostCalculation}
+                                                result={formatCurrency(calculation.totalFixedCost)}
+                                                highlight={animateFixed}
+                                            />
+                                            <CalculationStep 
+                                                title="ステップ2：超過ページ料金"
+                                                calculation={excessPagesCalculation}
+                                                result={formatCurrency(calculation.totalExcessCharge)}
+                                                highlight={animatePages}
+                                            />
+                                        </div>
+
+                                        {/* 最終合計 */}
+                                        <div className="relative">
+                                            <div className="absolute inset-0 flex items-center">
+                                                <div className="w-full border-t border-gray-300"></div>
+                                            </div>
+                                            <div className="relative flex justify-center">
+                                                <span className="bg-gray-50 px-4 text-sm text-gray-500">合計</span>
+                                            </div>
+                                        </div>
+                                        
+                                        <CalculationStep 
+                                            title="最終合計金額"
+                                            calculation={
+                                                <div className="flex items-center justify-around">
+                                                    <div className="text-center">
+                                                        <p className="text-xs text-indigo-200">固定料金</p>
+                                                        <p className="text-sm sm:text-base font-semibold">{formatCurrency(calculation.totalFixedCost)}</p>
+                                                    </div>
+                                                    <Icon name="plus" className="text-indigo-300 text-lg mx-2" />
+                                                    <div className="text-center">
+                                                        <p className="text-xs text-indigo-200">超過料金</p>
+                                                        <p className="text-sm sm:text-base font-semibold">{formatCurrency(calculation.totalExcessCharge)}</p>
+                                                    </div>
+                                                </div>
+                                            }
+                                            result={formatCurrency(calculation.totalCost)}
+                                            isTotal={true}
+                                        />
+                                    </div>
+                                )}
+
+                                {activeTab === 'breakdown' && (
+                                    <div className="bg-white p-4 sm:p-6 rounded-xl shadow-md border border-gray-200">
+                                        {window.Recharts ? (
+                                            <div style={{height: '350px', minHeight: '300px'}}>
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <BarChart data={chartData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+                                                        <XAxis dataKey="name" tick={{fontSize: 12}} />
+                                                        <YAxis tickFormatter={(tick) => `${tick / 10000}万円`} tick={{fontSize: 12}} />
+                                                        <Tooltip content={<CustomTooltip />} cursor={{fill: 'rgba(239, 246, 255, 0.5)'}} />
+                                                        <Bar dataKey="料金" radius={[4, 4, 0, 0]}>
+                                                            {chartData.map((entry, index) => (
+                                                                <Cell 
+                                                                    key={`cell-${index}`} 
+                                                                    fill={changedProjectId === entry.id ? '#10b981' : '#4f46e5'}
+                                                                    style={{
+                                                                        filter: changedProjectId === entry.id ? 'brightness(1.2)' : 'none',
+                                                                        transition: 'all 0.3s ease'
+                                                                    }}
+                                                                />
+                                                            ))}
+                                                        </Bar>
+                                                    </BarChart>
+                                                </ResponsiveContainer>
+                                            </div>
+                                        ) : (
+                                            <div className="h-64 sm:h-96 flex items-center justify-center bg-gray-50 rounded-lg">
+                                                <div className="text-center w-full px-4">
+                                                    <p className="text-gray-600 mb-4">案件ごとの料金</p>
+                                                    <div className="space-y-2 max-w-md mx-auto">
+                                                        {chartData.map((item, index) => {
+                                                            const isChanged = changedProjectId === item.id;
+                                                            return (
+                                                                <div 
+                                                                    key={index} 
+                                                                    className={`flex justify-between items-center p-3 rounded border transition-all duration-300 ${
+                                                                        isChanged 
+                                                                            ? 'bg-green-50 border-green-400 shadow-lg transform scale-105' 
+                                                                            : 'bg-white border-gray-200'
+                                                                    }`}
+                                                                >
+                                                                    <div>
+                                                                        <span className={`font-bold text-sm sm:text-base ${isChanged ? 'text-green-700' : ''}`}>
+                                                                            {item.name}
+                                                                        </span>
+                                                                        <span className="text-xs text-gray-500 ml-2">({item.pages}ページ)</span>
+                                                                    </div>
+                                                                    <span className={`text-sm sm:text-base font-bold ${
+                                                                        isChanged ? 'text-green-600' : 'text-indigo-600'
+                                                                    }`}>
+                                                                        {formatCurrency(item['料金'])}
+                                                                    </span>
+                                                                </div>
+                                                                );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                                
+                                <div className="mt-6 sm:mt-8 p-3 sm:p-4 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-800 rounded-r-lg">
+                                    <div className="flex">
+                                        <Icon name="alert-triangle" className="mr-2 sm:mr-3 mt-1 text-yellow-600 flex-shrink-0" />
+                                        <div>
+                                            <h4 className="font-bold text-sm sm:text-base">ご注意</h4>
+                                            <p className="text-xs sm:text-sm mt-1">プロジェクトは対象会社ごとに管理してください。異なる会社の契約書をアップロードすると、AIの解析精度が低下する可能性があります。</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </main>
+                </div>
+            );
+        };
+
+        // アプリケーションをレンダリング
+        window.onload = function() {
+            // ローディング表示を削除
+            document.getElementById('loading').style.display = 'none';
+            
+            try {
+                const root = ReactDOM.createRoot(document.getElementById('root'));
+                root.render(<App />);
+            } catch (error) {
+                console.error('エラーが発生しました:', error);
+                document.getElementById('root').innerHTML = `
+                    <div style="padding: 20px; text-align: center;">
+                        <h2>エラーが発生しました</h2>
+                        <p>ブラウザのコンソールで詳細を確認してください。</p>
+                        <p style="color: red;">${error.message}</p>
+                    </div>
+                `;
+            }
+        };
+    </script>
+</body>
+</html>
